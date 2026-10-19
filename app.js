@@ -361,11 +361,16 @@ function renderCompTabs() {
 /* ---------- team comparison ---------- */
 
 function pickerOptionsHTML() {
+  /* One option per team id. DATA.comps order is leagues first, CL last,
+     so a team in both keeps its league option; CL-only teams keep the CL one. */
+  var seen = {};
   return DATA.comps.map(function (c) {
     var opts = c.teams.map(function (tm) {
+      if (seen[tm[0]]) return '';
+      seen[tm[0]] = true;
       return '<option value="' + c.id + ':' + tm[0] + '">' + esc(tm[1]) + '</option>';
     }).join('');
-    return '<optgroup label="' + esc(t('competition.' + c.id)) + '">' + opts + '</optgroup>';
+    return opts ? '<optgroup label="' + esc(t('competition.' + c.id)) + '">' + opts + '</optgroup>' : '';
   }).join('');
 }
 
@@ -498,6 +503,7 @@ function recentTeamHTML(P) {
 function renderFixtures() {
   $('fixtures-h').textContent = t('fixtures.title');
   $('fixtures-sub').textContent = t('fixtures.sub');
+  $('fixtures-tz').innerHTML = '<bdi>' + esc(t('fixtures.tzNote')) + '</bdi>';
   var comp = compById(state.comp);
   var list = $('fixtures-list');
   var fx = upcomingFixtures(comp, 6);
