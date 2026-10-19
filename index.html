@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0a0e0c">
+<meta name="color-scheme" content="dark">
+<title>Hala — Football Analytics</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="app-header">
+  <div class="hero-glow" aria-hidden="true"></div>
+  <div class="header-inner">
+    <h1 class="brand">Hala
+      <small>Football analytics — top 5 European leagues, 2025/26 season</small>
+    </h1>
+    <span class="data-badge" id="data-badge">Data as of —</span>
+  </div>
+</header>
+
+<main>
+
+  <section id="standings-section" class="reveal" aria-labelledby="standings-h">
+    <h2 id="standings-h">Standings</h2>
+    <div class="league-tabs" role="tablist" aria-label="League selector" id="league-tabs"></div>
+    <div class="table-wrap">
+      <table id="standings-table" aria-label="League standings">
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Team</th>
+            <th scope="col">P</th>
+            <th scope="col">W</th>
+            <th scope="col">D</th>
+            <th scope="col">L</th>
+            <th scope="col">GF</th>
+            <th scope="col">GA</th>
+            <th scope="col">GD</th>
+            <th scope="col">Pts</th>
+            <th scope="col">Form <span style="font-weight:400">(last 5, oldest → latest)</span></th>
+          </tr>
+        </thead>
+        <tbody id="standings-body"></tbody>
+      </table>
+    </div>
+    <div class="legend" id="standings-legend"></div>
+    <p class="section-note">Sorted by points, then goal difference, then goals scored. Complete 2025/26 season — all fixtures played except one canceled match (Nantes vs Toulouse).</p>
+  </section>
+
+  <section id="h2h-section" class="reveal" data-d="1" aria-labelledby="h2h-h">
+    <h2 id="h2h-h">Head-to-Head</h2>
+    <p class="section-note">Pick any two teams. If they play in the same league, their past meetings from the 2025/26 season are shown, plus a prediction.</p>
+    <div class="h2h-controls">
+      <div class="field">
+        <label for="team-a">Team A (home side)</label>
+        <select id="team-a"></select>
+      </div>
+      <div class="field">
+        <label for="team-b">Team B (away side)</label>
+        <select id="team-b"></select>
+      </div>
+    </div>
+    <div id="h2h-error" class="error" hidden></div>
+    <div id="h2h-result" class="h2h-panels" hidden>
+      <div class="card">
+        <h3>Past meetings <span class="sub" id="h2h-league"></span></h3>
+        <ul class="meetings" id="h2h-meetings"></ul>
+        <dl class="stat-grid" style="margin-top:0.75rem">
+          <dt>Total goals in these meetings</dt><dd id="h2h-goals">—</dd>
+          <dt>Team A wins</dt><dd id="h2h-awins">—</dd>
+          <dt>Draws</dt><dd id="h2h-draws">—</dd>
+          <dt>Team B wins</dt><dd id="h2h-bwins">—</dd>
+        </dl>
+      </div>
+      <div class="card">
+        <h3>Recent form <span class="sub">last 5, oldest → latest</span></h3>
+        <div class="form-row"><span id="form-a-name"></span><span class="form-chips" id="form-a"></span></div>
+        <div class="form-row"><span id="form-b-name"></span><span class="form-chips" id="form-b"></span></div>
+        <h3 style="margin-top:1rem">Prediction</h3>
+        <div id="pred-bars"></div>
+      </div>
+    </div>
+    <div class="formula tilt" id="formula-box" hidden>
+      <h4>How the prediction is calculated (no black box)</h4>
+      <ol>
+        <li>Take each team's <strong>last 10 league matches</strong> and count wins, draws and losses → each team's win/draw/loss rates. A team's attacking record pushes its own win chance up; a team's <em>loss</em> rate pushes the opponent's win chance up.</li>
+        <li>Take their <strong>head-to-head meetings</strong> this season and count wins for Team A, draws, wins for Team B → head-to-head rates.</li>
+        <li>Blend them: <code>home score = 0.35 × (A win rate) + 0.35 × (B loss rate) + 0.30 × (A head-to-head win rate)</code>, and the same pattern for draw and away win. If the teams never met, the head-to-head part is dropped and the two teams' form count 50/50.</li>
+        <li>Normalize the three scores so they add up to 100%. Percentages are rounded.</li>
+      </ol>
+      <table aria-label="Prediction inputs">
+        <thead><tr><th scope="col">Input</th><th scope="col" style="text-align:right">Team A</th><th scope="col" style="text-align:right">Draw</th><th scope="col" style="text-align:right">Team B</th></tr></thead>
+        <tbody id="formula-inputs"></tbody>
+      </table>
+      <p style="margin-bottom:0;color:var(--text-muted)">Weights: each team's form 35% + head-to-head 30% (or 50/50 form when no meetings). This is a simple descriptive model, not a betting signal — it only looks at results, not injuries, lineups or xG.</p>
+    </div>
+  </section>
+
+  <section id="charts-section" class="reveal" data-d="2" aria-labelledby="charts-h">
+    <h2 id="charts-h">Charts</h2>
+    <p class="section-note">Charts follow the league selected in the Standings tabs above.</p>
+
+    <div class="chart-wrap tilt">
+      <h3>Points race — cumulative points per matchday</h3>
+      <p class="chart-note">Toggle up to 5 teams. X = matchday, Y = total points after that matchday.</p>
+      <div class="chart-controls" id="trend-toggles"></div>
+      <div id="trend-chart"></div>
+      <div class="chart-legend" id="trend-legend"></div>
+    </div>
+
+    <div class="chart-wrap tilt">
+      <h3>Goals for vs goals against</h3>
+      <p class="chart-note">Season totals per team, sorted by goals scored.</p>
+      <div id="gfga-chart"></div>
+      <div class="chart-legend">
+        <span><span class="key" style="background:var(--bar-gf)"></span>Goals for</span>
+        <span><span class="key" style="background:var(--bar-ga)"></span>Goals against</span>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Hala — static football analytics. Data: openfootball/football.json (2025/26 season, frozen snapshot). No tracking, no network requests.
+</footer>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+<script>
+/* Hala — motion layer (design polish). Independent of app.js: it only
+   adds classes and inline transforms, and never touches app state.
+   Bails out entirely under prefers-reduced-motion; without JS the page
+   is fully visible and static. Zero external requests. */
+(function () {
+  'use strict';
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) return;
+  var finePointer = window.matchMedia('(pointer: fine)').matches;
+  document.documentElement.classList.add('js-motion');
+
+  /* scroll reveals (staggered via data-d) */
+  var io = new IntersectionObserver(function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].isIntersecting) {
+        entries[i].target.classList.add('in');
+        io.unobserve(entries[i].target);
+      }
+    }
+  }, { threshold: 0.1, rootMargin: '0px 0px -6% 0px' });
+  var reveals = document.querySelectorAll('.reveal');
+  for (var i = 0; i < reveals.length; i++) io.observe(reveals[i]);
+
+  /* hero parallax — scroll-scrubbed, transform-only, rAF-throttled */
+  var glow = document.querySelector('.hero-glow');
+  var ticking = false;
+  function onScroll() {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function () {
+      ticking = false;
+      var y = window.scrollY || window.pageYOffset;
+      if (glow && y < 500) {
+        glow.style.transform = 'translate3d(0,' + (y * 0.22).toFixed(1) + 'px,0)';
+      }
+    });
+  }
+  if (glow) window.addEventListener('scroll', onScroll, { passive: true });
+
+  /* subtle 3D tilt on chart cards — fine pointers only */
+  if (finePointer) {
+    var cards = document.querySelectorAll('.tilt');
+    for (var c = 0; c < cards.length; c++) {
+      (function (card) {
+        var raf = 0, lastX = 0, lastY = 0;
+        card.addEventListener('pointermove', function (ev) {
+          lastX = ev.clientX; lastY = ev.clientY;
+          if (raf) return;
+          raf = requestAnimationFrame(function () {
+            raf = 0;
+            var r = card.getBoundingClientRect();
+            var x = (lastX - r.left) / r.width - 0.5;
+            var y = (lastY - r.top) / r.height - 0.5;
+            card.style.transform =
+              'perspective(1000px) rotateX(' + (-y * 3.5).toFixed(2) +
+              'deg) rotateY(' + (x * 4.5).toFixed(2) + 'deg)';
+          });
+        });
+        card.addEventListener('pointerleave', function () { card.style.transform = ''; });
+      })(cards[c]);
+    }
+  }
+})();
+</script>
+</body>
+</html>
