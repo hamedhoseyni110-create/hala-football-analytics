@@ -19,7 +19,13 @@ var state = {
   cmpB: '',
   h2hA: '',
   h2hB: '',
-  trendSel: [] // team ids, max 5
+  trendSel: [], // team ids, max 5
+  scope: 'ALL',  // league-scope chips: 'ALL' or a comp id
+  stMode: 'all', // standings sub-mode: 'all' | 'home' | 'away' | 'form'
+  fxAll: false,  // fixtures: show the full upcoming list
+  hl: null,      // scope-lock highlight: {comp, tids:[..]}
+  resMD: null,   // results browser matchday (null = latest finished)
+  hub: null      // team hub: {comp, tid}
 };
 
 var LS_KEY = 'hala.lang';
@@ -177,6 +183,117 @@ function upcomingFixtures(comp, n) {
   }
   out.sort(function (a, b) { return a[6] < b[6] ? -1 : (a[6] > b[6] ? 1 : 0); });
   return out.slice(0, n);
+}
+
+/* ---------- v3: team analytics (pure computations) ---------- */
+
+/* home/away splits from FINISHED matches */
+function splitsOf(comp, tid) {
+  function blank() { return { p: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0 }; }
+  var h = blank(), a = blank();
+  var ms = teamMatches(comp, tid);
+  for (var i = 0; i < ms.length; i++) {
+    var m = ms[i], home = m[0] === tid;
+    var gf = home ? m[4] : m[5], ga = home ? m[5] : m[4];
+    var s = home ? h : a;
+    s.p++; s.gf += gf; s.ga += ga;
+    if (gf > ga) s.w++; else if (gf < ga) s.l++; else s.d++;
+  }
+  return { home: h, away: a };
+}
+
+/* standings rows recomputed per mode: 'all' | 'home' | 'away' | 'form'.
+   Row layout matches comp.table: [pos, tid, p, w, d, l, gf, ga, gd, pts] */
+function splitTableRows(comp, mode) {
+  if (mode === 'all') return comp.table;
+  var rows = comp.teams.map(function (tm) {
+    var tid = tm[0];
+    var ms = teamMatches(comp, tid), use = ms;
+    if (mode === 'home') use = ms.filter(function (m) { return m[0] === tid; });
+    else if (mode === 'away') use = ms.filter(function (m) { return m[1] === tid; });
+    else if (mode === 'form') use = ms.slice(-5);
+    var p = 0, w = 0, d = 0, l = 0, gf = 0, ga = 0;
+    for (var i = 0; i < use.length; i++) {
+      var m = use[i];
+      var f = m[0] === tid ? m[4] : m[5], ag = m[0] === tid ? m[5] : m[4];
+      p++; gf += f; ga += ag;
+      if (f > ag) w++; else if (f < ag) l++; else d++;
+    }
+    var pts = w * 3 + d;
+    return [0, tid, p, w, d, l, gf, ga, gf - ga, pts];
+  });
+  rows.sort(function (a, b) {
+    return (b[9] - a[9]) || (b[8] - a[8]) || (b[6] - a[6]);
+  });
+  rows.forEach(function (r, i) { r[0] = i + 1; });
+  return rows;
+}
+
+/* current streak from most recent results, newest first.
+   {type:'W'|'D'|'L'|'N', n} — D = unbeaten run, N = winless run */
+function streakOf(comp, tid) {
+  var ms = teamMatches(comp, tid), rs = [], n = 0;
+  for (var i = ms.length - 1; i >= 0; i--) rs.push(resultFor(ms[i], tid));
+  if (!rs.length) return { type: 'N', n: 0 };
+  if (rs[0] === 'W') { while (n < rs.length && rs[n] === 'W') n++; return { type: 'W', n: n }; }
+  if (rs[0] === 'L') { while (n < rs.length && rs[n] === 'L') n++; return { type: 'L', n: n }; }
+  var hasW = false, hasL = false;
+  while (n < rs.length) {
+    if (rs[n] === 'W') { if (hasL) break; hasW = true; }
+    else if (rs[n] === 'L') { if (hasW) break; hasL = true; }
+    n++;
+  }
+  return { type: hasW ? 'D' : (hasL ? 'N' : 'D'), n: n };
+}
+
+function streakText(st) {
+  var key = st.type === 'W' ? 'hub.streakW'
+    : st.type === 'L' ? 'hub.streakL'
+    : st.type === 'D' ? 'hub.streakD' : 'hub.streakN';
+  return t(key, { n: '<bdi>' + esc(fmtN(st.n)) + '</bdi>' });
+}
+
+/* goals analytics from FINISHED matches */
+function goalsStats(comp, tid) {
+  var ms = teamMatches(comp, tid), n = ms.length;
+  var cs = 0, btts = 0, over25 = 0, gf = 0;
+  for (var i = 0; i < n; i++) {
+    var m = ms[i];
+    var f = m[0] === tid ? m[4] : m[5], a = m[0] === tid ? m[5] : m[4];
+    if (a === 0) cs++;
+    if (f > 0 && a > 0) btts++;
+    if (f + a > 2.5) over25++;
+    gf += f;
+  }
+  return {
+    n: n, cs: cs,
+    btts: n ? btts / n * 100 : 0,
+    gpg: n ? gf / n : 0,
+    over25: n ? over25 / n * 100 : 0
+  };
+}
+
+function nextFixturesFor(comp, tid, n) {
+  var out = [];
+  for (var i = 0; i < comp.m.length; i++) {
+    var m = comp.m[i];
+    if (m[3] > 0 && (m[0] === tid || m[1] === tid)) out.push(m);
+  }
+  out.sort(function (a, b) { return a[6] < b[6] ? -1 : (a[6] > b[6] ? 1 : 0); });
+  return out.slice(0, n);
+}
+
+function finishedMatchdays(comp) {
+  var set = {};
+  for (var i = 0; i < comp.m.length; i++) {
+    if (comp.m[i][3] === 0 && comp.m[i][2] > 0) set[comp.m[i][2]] = true;
+  }
+  return Object.keys(set).map(Number).sort(function (a, b) { return a - b; });
+}
+
+function matchesOfMD(comp, md) {
+  return comp.m.filter(function (m) { return m[3] === 0 && m[2] === md; })
+    .sort(function (a, b) { return a[6] < b[6] ? -1 : 1; });
 }
 
 /* last-10 W/D/L rates — byte-identical math to v1 */
@@ -338,9 +455,14 @@ function wireCompTabs(el) {
         if (id !== state.comp) {
           state.comp = id;
           state.trendSel = [];
+          state.hl = null;      /* manual switch overrides scope-lock */
+          state.resMD = null;
+          state.fxAll = false;
           renderCompTabs();
           renderFixtures();
           renderStandings();
+          renderResults();
+          renderScorers();
           renderCharts();
         }
       });
@@ -349,22 +471,34 @@ function wireCompTabs(el) {
 }
 
 function renderCompTabs() {
-  var ft = $('fixture-tabs'), lt = $('league-tabs');
-  ft.innerHTML = compTabHTML();
-  lt.innerHTML = compTabHTML();
-  wireCompTabs(ft);
-  wireCompTabs(lt);
-  ft.setAttribute('aria-label', t('fixtures.title'));
-  lt.setAttribute('aria-label', t('standings.title'));
+  var ids = ['fixture-tabs', 'league-tabs', 'results-tabs', 'scorers-tabs'];
+  var labels = [t('fixtures.title'), t('standings.title'), t('results.title'), t('scorers.title')];
+  ids.forEach(function (id, i) {
+    var el = $(id);
+    el.innerHTML = compTabHTML();
+    wireCompTabs(el);
+    el.setAttribute('aria-label', labels[i]);
+  });
 }
 
 /* ---------- team comparison ---------- */
 
+/* one-tap rivalry shortcuts: [pickerA value, pickerB value] */
+var RIVALRIES = [
+  ['PD:86', 'PD:81'],   /* Real Madrid vs Barcelona */
+  ['PL:65', 'PL:57'],   /* Man City vs Arsenal */
+  ['SA:108', 'SA:98'],  /* Inter vs Milan */
+  ['BL1:5', 'BL1:4'],   /* Bayern vs Dortmund */
+  ['FL1:524', 'FL1:516'] /* PSG vs Marseille */
+];
+
 function pickerOptionsHTML() {
   /* One option per team id. DATA.comps order is leagues first, CL last,
-     so a team in both keeps its league option; CL-only teams keep the CL one. */
+     so a team in both keeps its league option; CL-only teams keep the CL one.
+     The league-scope chips narrow the list to a single competition. */
   var seen = {};
-  return DATA.comps.map(function (c) {
+  var comps = state.scope === 'ALL' ? DATA.comps : [compById(state.scope)];
+  return comps.map(function (c) {
     var opts = c.teams.map(function (tm) {
       if (seen[tm[0]]) return '';
       seen[tm[0]] = true;
@@ -372,6 +506,67 @@ function pickerOptionsHTML() {
     }).join('');
     return opts ? '<optgroup label="' + esc(t('competition.' + c.id)) + '">' + opts + '</optgroup>' : '';
   }).join('');
+}
+
+/* clickable team name → opens the team hub (dedicated view) */
+function teamLinkHTML(comp, tid) {
+  return '<button type="button" class="team-link" data-comp="' + comp.id +
+    '" data-tid="' + tid + '"><bdi>' + esc(teamName(comp, tid)) + '</bdi></button>';
+}
+
+function renderScope() {
+  $('scope-label').textContent = t('scope.label');
+  var box = $('scope-chips');
+  box.innerHTML = '';
+  var scopes = ['ALL'].concat(DATA.comps.map(function (c) { return c.id; }));
+  scopes.forEach(function (id) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'scope-chip';
+    btn.setAttribute('aria-pressed', state.scope === id ? 'true' : 'false');
+    btn.textContent = id === 'ALL' ? t('scope.all') : t('competition.' + id);
+    btn.setAttribute('data-scope', id);
+    (function (sid) {
+      btn.addEventListener('click', function () { setScope(sid); });
+    })(id);
+    box.appendChild(btn);
+  });
+  box.setAttribute('aria-label', t('scope.label'));
+}
+
+function setScope(id) {
+  if (state.scope === id) return;
+  state.scope = id;
+  /* drop selections outside the scoped league */
+  ['cmpA', 'cmpB', 'h2hA', 'h2hB'].forEach(function (k) {
+    var P = parsePicker(state[k]);
+    if (P && id !== 'ALL' && P.comp.id !== id) state[k] = '';
+  });
+  fillPickers();
+  renderScope();
+  renderComparePanels();
+  renderH2H();
+}
+
+function renderRivalries() {
+  $('rivalries-h').textContent = t('compare.rivalries');
+  var cards = $('rivalry-cards');
+  cards.innerHTML = '';
+  RIVALRIES.forEach(function (pair) {
+    var A = parsePicker(pair[0]), B = parsePicker(pair[1]);
+    if (!A || !B) return;
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'rivalry-card';
+    b.innerHTML = '<span>' + bdi(teamName(A.comp, A.tid)) + '</span>' +
+      '<span class="vs">' + esc(t('compare.vs')) + '</span>' +
+      '<span>' + bdi(teamName(B.comp, B.tid)) + '</span>';
+    (function (a, c) {
+      b.addEventListener('click', function () { setCompare(a, c); });
+    })(pair[0], pair[1]);
+    cards.appendChild(b);
+  });
+  $('rivalries').hidden = false;
 }
 
 function parsePicker(val) {
@@ -421,11 +616,12 @@ function renderCompare() {
   recent.hidden = false;
 }
 
-/* stat rows for one team: [key, label, value, better('hi'|'lo'|null)] */
+/* stat rows for one team: [key, label, value, better('hi'|'lo'|null)].
+   'group' rows are section headers; string values render as pre-built HTML. */
 function cmpStatRows(P) {
   var comp = P.comp, tid = P.tid;
   var row = rowOf(comp, tid);
-  return [
+  var rows = [
     ['position', t('compare.stat.position'), row ? row[0] : null, 'lo'],
     ['played', t('compare.stat.played'), row ? row[2] : null, null],
     ['won', t('compare.stat.won'), row ? row[3] : null, 'hi'],
@@ -436,6 +632,16 @@ function cmpStatRows(P) {
     ['gd', t('compare.stat.gd'), row ? row[8] : null, 'hi'],
     ['points', t('compare.stat.points'), row ? row[9] : null, 'hi']
   ];
+  /* Goals group — from finished matches */
+  var gs = goalsStats(comp, tid);
+  rows.push(['group', t('compare.goalsGroup'), null, null]);
+  rows.push(['cs', t('compare.stat.cs'), gs.cs, 'hi']);
+  rows.push(['btts', t('compare.stat.btts'), '<bdi>' + esc(pctStr(gs.btts)) + '</bdi>', null]);
+  rows.push(['gpg', t('compare.stat.gpg'),
+    '<bdi>' + esc(nf().format(Math.round(gs.gpg * 10) / 10)) + '</bdi>', 'hi']);
+  rows.push(['over25', t('compare.stat.over25'), '<bdi>' + esc(pctStr(gs.over25)) + '</bdi>', null]);
+  rows.push(['streak', t('compare.stat.streak'), streakText(streakOf(comp, tid)), null]);
+  return rows;
 }
 
 function comparePanelRender(P, other) {
@@ -443,6 +649,9 @@ function comparePanelRender(P, other) {
   var rows = cmpStatRows(P), oRows = cmpStatRows(other);
   var lis = rows.map(function (r, i) {
     var label = r[1], v = r[2], better = r[3];
+    if (r[0] === 'group') {
+      return '<li class="row-group"><span>' + esc(label) + '</span></li>';
+    }
     var ov = oRows[i][2];
     var leads = '';
     if (better && typeof v === 'number' && typeof ov === 'number' && v !== ov) {
@@ -450,7 +659,9 @@ function comparePanelRender(P, other) {
       if (isLead) leads = ' class="leads" title="' + esc(t('compare.leads')) + '"';
     }
     var vHtml;
-    if (typeof v !== 'number') {
+    if (typeof v === 'string') {
+      vHtml = v; /* pre-built localized HTML (bdi-wrapped) */
+    } else if (typeof v !== 'number') {
       vHtml = '<bdi>—</bdi>';
     } else if (r[0] === 'gd' && v > 0) {
       vHtml = '<bdi>+' + esc(fmtN(v)) + '</bdi>';
@@ -481,7 +692,7 @@ function comparePanelRender(P, other) {
 
   return '<article class="card cmp-panel">' +
     '<div class="cmp-head">' + crestHTML(comp, tid) +
-    '<h3>' + bdi(teamName(comp, tid)) +
+    '<h3>' + teamLinkHTML(comp, tid) +
     '<span class="comp-name">' + esc(t('competition.' + comp.id)) + '</span></h3></div>' +
     '<ul class="stat-rows">' + lis + '</ul>' +
     '<div class="ucl-strip"><h4>' + esc(t('compare.uclTitle')) + '</h4>' + uclHtml + '</div>' +
@@ -489,6 +700,36 @@ function comparePanelRender(P, other) {
 }
 
 function renderComparePanels() { renderCompare(); }
+
+/* Central compare setter with scope-lock (M1):
+   when both teams share a competition, the shared tabs snap to it,
+   both teams are highlighted in the table, and H2H auto-fills.
+   Manual tab switches afterwards override — no hard lock. */
+function setCompare(aVal, bVal) {
+  state.cmpA = aVal; state.cmpB = bVal;
+  $('cmp-a').value = aVal; $('cmp-b').value = bVal;
+  renderComparePanels();
+  var A = parsePicker(aVal), B = parsePicker(bVal);
+  if (A && B && A.comp.id === B.comp.id && A.tid !== B.tid) {
+    state.hl = { comp: A.comp.id, tids: [A.tid, B.tid] };
+    if (state.comp !== A.comp.id) {
+      state.comp = A.comp.id;
+      state.trendSel = [];
+      renderCompTabs();
+      renderFixtures();
+      renderResults();
+      renderScorers();
+      renderCharts();
+    }
+    renderStandings();
+    /* H2H auto-fill */
+    state.h2hA = aVal; state.h2hB = bVal;
+    $('h2h-a').value = aVal; $('h2h-b').value = bVal;
+    renderH2H();
+  } else {
+    if (state.hl) { state.hl = null; renderStandings(); }
+  }
+}
 
 function recentTeamHTML(P) {
   var ms = teamMatches(P.comp, P.tid).slice(-3).reverse();
@@ -506,22 +747,32 @@ function renderFixtures() {
   $('fixtures-tz').innerHTML = '<bdi>' + esc(t('fixtures.tzNote')) + '</bdi>';
   var comp = compById(state.comp);
   var list = $('fixtures-list');
-  var fx = upcomingFixtures(comp, 6);
+  var fx = upcomingFixtures(comp, state.fxAll ? 9999 : 6);
   var empty = $('fixtures-empty');
   if (!fx.length) {
     list.innerHTML = '';
     empty.hidden = false;
     empty.textContent = t('fixtures.noFixtures');
-    return;
+  } else {
+    empty.hidden = true;
+    list.innerHTML = fx.map(function (m) {
+      return '<li><span class="fixture-teams">' + bdi(teamName(comp, m[0])) +
+        '<span class="vs">' + esc(t('compare.vs')) + '</span>' + bdi(teamName(comp, m[1])) + '</span>' +
+        '<span class="fixture-meta"><span class="md-chip">' +
+        t('fixtures.matchday', { n: '<bdi>' + esc(fmtN(m[2])) + '</bdi>' }) +
+        '</span><bdi>' + esc(fmtDT(m[6])) + '</bdi></span></li>';
+    }).join('');
   }
-  empty.hidden = true;
-  list.innerHTML = fx.map(function (m) {
-    return '<li><span class="fixture-teams">' + bdi(teamName(comp, m[0])) +
-      '<span class="vs">' + esc(t('compare.vs')) + '</span>' + bdi(teamName(comp, m[1])) + '</span>' +
-      '<span class="fixture-meta"><span class="md-chip">' +
-      t('fixtures.matchday', { n: '<bdi>' + esc(fmtN(m[2])) + '</bdi>' }) +
-      '</span><bdi>' + esc(fmtDT(m[6])) + '</bdi></span></li>';
-  }).join('');
+  /* show more / less (m3) */
+  var more = $('fixtures-more');
+  var total = upcomingFixtures(comp, 9999).length;
+  if (total > 6) {
+    more.hidden = false;
+    more.innerHTML = state.fxAll ? esc(t('fixtures.showLess'))
+      : t('fixtures.showMore', { n: '<bdi>' + esc(fmtN(total)) + '</bdi>' });
+  } else {
+    more.hidden = true;
+  }
 }
 
 /* ---------- standings ---------- */
@@ -537,6 +788,36 @@ function zoneClass(comp, pos, n) {
   return '';
 }
 
+/* ---------- standings (modes: all | home | away | form) ---------- */
+
+function renderStandingsMode() {
+  var modes = [
+    ['all', 'standings.modeAll'], ['home', 'standings.modeHome'],
+    ['away', 'standings.modeAway'], ['form', 'standings.modeForm']
+  ];
+  $('standings-mode-label').textContent = t('standings.modeLabel');
+  var box = $('standings-mode');
+  box.innerHTML = '';
+  modes.forEach(function (mm) {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'seg-btn';
+    btn.setAttribute('aria-pressed', state.stMode === mm[0] ? 'true' : 'false');
+    btn.textContent = t(mm[1]);
+    (function (mode) {
+      btn.addEventListener('click', function () {
+        if (state.stMode !== mode) {
+          state.stMode = mode;
+          renderStandingsMode();
+          renderStandings();
+        }
+      });
+    })(mm[0]);
+    box.appendChild(btn);
+  });
+  box.setAttribute('aria-label', t('standings.modeLabel'));
+}
+
 function renderStandings() {
   var comp = compById(state.comp);
   $('standings-h').textContent = t('standings.title');
@@ -549,13 +830,17 @@ function renderStandings() {
     ' <span style="font-weight:400;letter-spacing:0;text-transform:none">(' + esc(t('standings.formNote')) + ')</span></th>';
   $('standings-head').innerHTML = head;
 
-  var n = comp.table.length;
-  $('standings-body').innerHTML = comp.table.map(function (r) {
+  var rows = splitTableRows(comp, state.stMode);
+  var n = rows.length;
+  var hl = state.hl && state.hl.comp === comp.id ? state.hl.tids : [];
+  $('standings-body').innerHTML = rows.map(function (r) {
     var tid = r[1], pos = r[0];
     var gd = (r[8] > 0 ? '+' : '') + r[8];
-    return '<tr class="' + zoneClass(comp, pos, n) + '">' +
+    var zc = state.stMode === 'all' ? zoneClass(comp, pos, n) : '';
+    var cls = (zc ? zc : '') + (hl.indexOf(tid) >= 0 ? (zc ? ' ' : '') + 'hl' : '');
+    return '<tr class="' + cls + '">' +
       '<td><span class="pos"><bdi>' + esc(fmtN(pos)) + '</bdi></span></td>' +
-      '<td><span class="team-cell">' + crestHTML(comp, tid, true) + bdi(teamName(comp, tid)) + '</span></td>' +
+      '<td><span class="team-cell">' + crestHTML(comp, tid, true) + teamLinkHTML(comp, tid) + '</span></td>' +
       '<td><bdi>' + esc(fmtN(r[2])) + '</bdi></td>' +
       '<td><bdi>' + esc(fmtN(r[3])) + '</bdi></td>' +
       '<td><bdi>' + esc(fmtN(r[4])) + '</bdi></td>' +
@@ -583,12 +868,163 @@ function renderStandings() {
       ' <span class="legend-sep">·</span> ' + chipKeyHTML();
   }
 
-  $('standings-note').textContent = t('standings.note');
+  var note = t('standings.note');
+  if (state.stMode !== 'all') {
+    var modeNames = { home: t('standings.modeHome'), away: t('standings.modeAway'), form: t('standings.modeForm') };
+    note = modeNames[state.stMode] + ' · ' + note;
+  }
+  $('standings-note').textContent = note;
+  $('tap-hint').textContent = t('hub.tapHint');
   var freshKey = comp.id === 'CL' ? 'ucl.freshNote' : 'standings.freshNote';
   $('standings-fresh').innerHTML = t(freshKey, {
     competition: esc(t('competition.' + comp.id)),
     date: '<bdi>' + esc(fmtDate(comp.fresh)) + '</bdi>'
   });
+}
+
+/* ---------- results browser (by matchday) ---------- */
+
+function renderResults() {
+  $('results-h').textContent = t('results.title');
+  $('results-sub').textContent = t('results.sub');
+  var comp = compById(state.comp);
+  var mds = finishedMatchdays(comp);
+  var list = $('results-list');
+  if (!mds.length) {
+    list.innerHTML = '';
+    $('md-label').textContent = '';
+    return;
+  }
+  if (!state.resMD || mds.indexOf(state.resMD) < 0) state.resMD = mds[mds.length - 1];
+  var md = state.resMD;
+  $('md-label').innerHTML = t('results.matchday', { n: '<bdi>' + esc(fmtN(md)) + '</bdi>' });
+  var prev = $('md-prev'), next = $('md-next');
+  prev.textContent = t('results.prev');
+  next.textContent = t('results.next');
+  prev.disabled = md <= mds[0];
+  next.disabled = md >= mds[mds.length - 1];
+  list.innerHTML = matchesOfMD(comp, md).map(function (m) {
+    return '<li><span class="fixture-teams">' + bdi(teamName(comp, m[0])) +
+      ' <strong><bdi>' + esc(fmtN(m[4])) + '–' + esc(fmtN(m[5])) + '</bdi></strong> ' +
+      bdi(teamName(comp, m[1])) + '</span>' +
+      '<span class="date"><bdi>' + esc(fmtDate(m[6])) + '</bdi></span></li>';
+  }).join('');
+}
+
+function stepResults(dir) {
+  var comp = compById(state.comp);
+  var mds = finishedMatchdays(comp);
+  if (!mds.length) return;
+  if (!state.resMD || mds.indexOf(state.resMD) < 0) state.resMD = mds[mds.length - 1];
+  var i = mds.indexOf(state.resMD) + dir;
+  if (i < 0) i = 0;
+  if (i > mds.length - 1) i = mds.length - 1;
+  state.resMD = mds[i];
+  renderResults();
+}
+
+/* ---------- top scorers ---------- */
+
+function renderScorers() {
+  $('scorers-h').textContent = t('scorers.title');
+  $('scorers-sub').textContent = t('scorers.sub');
+  var comp = compById(state.comp);
+  var ths = ['rank', 'player', 'team', 'goals', 'assists', 'pens', 'apps'];
+  $('scorers-head').innerHTML = ths.map(function (k) {
+    return '<th scope="col">' + esc(t('scorers.th.' + k)) + '</th>';
+  }).join('');
+  var dash = '<bdi>–</bdi>';
+  $('scorers-body').innerHTML = (comp.scorers || []).map(function (s, i) {
+    return '<tr>' +
+      '<td><span class="pos"><bdi>' + esc(fmtN(i + 1)) + '</bdi></span></td>' +
+      '<td>' + bdi(s[0]) + '</td>' +
+      '<td>' + bdi(teamName(comp, s[1])) + '</td>' +
+      '<td><strong><bdi>' + esc(fmtN(s[2])) + '</bdi></strong></td>' +
+      '<td>' + (s[3] == null ? dash : '<bdi>' + esc(fmtN(s[3])) + '</bdi>') + '</td>' +
+      '<td>' + (s[4] == null ? dash : '<bdi>' + esc(fmtN(s[4])) + '</bdi>') + '</td>' +
+      '<td><bdi>' + esc(fmtN(s[5])) + '</bdi></td></tr>';
+  }).join('');
+}
+
+/* ---------- team hub (dedicated view) ---------- */
+
+function openHub(compId, tid) {
+  var comp = compById(compId);
+  if (!teamOf(comp, tid)) return;
+  state.hub = { comp: compId, tid: tid };
+  $('hub-section').hidden = false;
+  renderHub();
+  var sec = $('hub-section');
+  if (sec.scrollIntoView) sec.scrollIntoView();
+}
+
+function closeHub() {
+  state.hub = null;
+  $('hub-section').hidden = true;
+}
+
+function hubFixtureLI(comp, m, withScore) {
+  var mid;
+  if (withScore) {
+    mid = ' <strong><bdi>' + esc(fmtN(m[4])) + '–' + esc(fmtN(m[5])) + '</bdi></strong> ';
+  } else {
+    mid = '<span class="vs">' + esc(t('compare.vs')) + '</span>';
+  }
+  var meta = withScore
+    ? '<span class="date"><bdi>' + esc(fmtDate(m[6])) + '</bdi></span>'
+    : '<span class="fixture-meta"><bdi>' + esc(fmtDT(m[6])) + '</bdi></span>';
+  return '<li><span class="fixture-teams">' + bdi(teamName(comp, m[0])) + mid +
+    bdi(teamName(comp, m[1])) + '</span>' + meta + '</li>';
+}
+
+function renderHub() {
+  var H = state.hub;
+  if (!H) return;
+  var comp = compById(H.comp), tid = H.tid;
+  var arrow = document.documentElement.dir === 'rtl' ? '→' : '←';
+  $('hub-back').innerHTML = esc(arrow) + ' ' + esc(t('hub.back'));
+
+  var row = rowOf(comp, tid);
+  var sp = splitsOf(comp, tid);
+  var st = streakOf(comp, tid);
+  var last5 = teamMatches(comp, tid).slice(-5).reverse();
+  var next3 = nextFixturesFor(comp, tid, 3);
+
+  function haRow(label, s) {
+    return '<tr><td>' + esc(label) + '</td>' +
+      '<td><bdi>' + esc(fmtN(s.p)) + '</bdi></td>' +
+      '<td><bdi>' + esc(fmtN(s.w)) + '–' + esc(fmtN(s.d)) + '–' + esc(fmtN(s.l)) + '</bdi></td>' +
+      '<td><bdi>' + esc(fmtN(s.gf)) + '–' + esc(fmtN(s.ga)) + '</bdi></td></tr>';
+  }
+
+  $('hub-body').innerHTML =
+    '<div class="hub-head">' + crestHTML(comp, tid) +
+    '<div><h3 id="hub-h">' + bdi(teamName(comp, tid)) + '</h3>' +
+    '<p class="hub-comp">' + esc(t('competition.' + comp.id)) + '</p></div></div>' +
+    '<div class="hub-grid">' +
+    '<div class="hub-stat"><span class="k">' + esc(t('hub.position')) + '</span>' +
+    '<span class="v"><bdi>#' + esc(fmtN(row ? row[0] : '–')) + '</bdi></span></div>' +
+    '<div class="hub-stat"><span class="k">' + esc(t('compare.stat.points')) + '</span>' +
+    '<span class="v"><bdi>' + esc(fmtN(row ? row[9] : 0)) + '</bdi></span></div>' +
+    '<div class="hub-stat"><span class="k">' + esc(t('hub.streak')) + '</span>' +
+    '<span class="v">' + streakText(st) + '</span></div>' +
+    '<div class="hub-stat"><span class="k">' + esc(t('compare.stat.form')) + '</span>' +
+    '<span class="v">' + formChipsHTML(comp, tid, 5) + '</span></div>' +
+    '</div>' +
+    '<h4>' + esc(t('hub.nextUp')) + '</h4>' +
+    (next3.length ? '<ul class="fixtures">' + next3.map(function (m) { return hubFixtureLI(comp, m, false); }).join('') + '</ul>'
+      : '<p class="quiet">' + esc(t('fixtures.noFixtures')) + '</p>') +
+    '<h4>' + esc(t('hub.last5')) + '</h4>' +
+    (last5.length ? '<ul class="fixtures">' + last5.map(function (m) { return hubFixtureLI(comp, m, true); }).join('') + '</ul>'
+      : '<p class="quiet">' + esc(t('compare.formEmpty')) + '</p>') +
+    '<h4>' + esc(t('hub.haTitle')) + '</h4>' +
+    '<div class="table-wrap"><table class="ha-table"><thead><tr>' +
+    '<th scope="col"></th><th scope="col">' + esc(t('compare.stat.played')) + '</th>' +
+    '<th scope="col">' + esc(t('compare.stat.won')) + '–' + esc(t('compare.stat.drawn')) + '–' + esc(t('compare.stat.lost')) + '</th>' +
+    '<th scope="col">' + esc(t('compare.stat.gf')) + '–' + esc(t('compare.stat.ga')) + '</th>' +
+    '</tr></thead><tbody>' +
+    haRow(t('hub.home'), sp.home) + haRow(t('hub.away'), sp.away) +
+    '</tbody></table></div>';
 }
 
 /* ---------- head-to-head ---------- */
@@ -940,12 +1376,18 @@ function renderAll() {
   renderHero();
   renderCompTabs();
   fillPickers();
+  renderScope();
+  renderRivalries();
   renderComparePanels();
   renderFixtures();
+  renderStandingsMode();
   renderStandings();
+  renderResults();
+  renderScorers();
   renderH2H();
   renderCharts();
   renderFooter();
+  if (state.hub) renderHub();
 }
 
 function init() {
@@ -959,10 +1401,43 @@ function init() {
 
   renderAll();
 
-  $('cmp-a').addEventListener('change', function (e) { state.cmpA = e.target.value; renderComparePanels(); });
-  $('cmp-b').addEventListener('change', function (e) { state.cmpB = e.target.value; renderComparePanels(); });
+  $('cmp-a').addEventListener('change', function (e) { setCompare(e.target.value, state.cmpB); });
+  $('cmp-b').addEventListener('change', function (e) { setCompare(state.cmpA, e.target.value); });
   $('h2h-a').addEventListener('change', function (e) { state.h2hA = e.target.value; renderH2H(); });
   $('h2h-b').addEventListener('change', function (e) { state.h2hB = e.target.value; renderH2H(); });
+
+  /* fixtures show more / less */
+  $('fixtures-more').addEventListener('click', function () {
+    state.fxAll = !state.fxAll;
+    renderFixtures();
+  });
+
+  /* results matchday stepper */
+  $('md-prev').addEventListener('click', function () { stepResults(-1); });
+  $('md-next').addEventListener('click', function () { stepResults(1); });
+
+  /* team hub */
+  $('hub-back').addEventListener('click', closeHub);
+  document.addEventListener('click', function (e) {
+    var el = e.target && e.target.closest ? e.target.closest('.team-link') : null;
+    if (el) {
+      openHub(el.getAttribute('data-comp'), parseInt(el.getAttribute('data-tid'), 10));
+    }
+  });
+
+  /* test API (used by tests/run.js) */
+  window.HALA_TEST = {
+    state: state,
+    splitsOf: splitsOf,
+    splitTableRows: splitTableRows,
+    streakOf: streakOf,
+    goalsStats: goalsStats,
+    finishedMatchdays: finishedMatchdays,
+    setCompare: setCompare,
+    setScope: setScope,
+    openHub: openHub,
+    closeHub: closeHub
+  };
 
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(function () { positionLangPill(); });
