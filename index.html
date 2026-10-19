@@ -1,11 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0a0e0c">
 <meta name="color-scheme" content="dark">
+<meta name="description" content="Hala — static football analytics: standings, form, head-to-head and predictions for the top 5 European leagues + the Champions League, 2026/27.">
 <title>Hala — Football Analytics</title>
+<link rel="preload" href="assets/fonts/Vazirmatn-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -13,127 +15,153 @@
 <header class="app-header">
   <div class="hero-glow" aria-hidden="true"></div>
   <div class="header-inner">
-    <h1 class="brand">Hala
-      <small>Football analytics — top 5 European leagues, 2025/26 season</small>
-    </h1>
-    <span class="data-badge" id="data-badge">Data as of —</span>
+    <div class="brand-block">
+      <h1 class="brand">Hala</h1>
+      <p class="tagline" id="brand-tagline"></p>
+    </div>
+    <div class="header-controls">
+      <div class="lang-toggle" id="lang-toggle" role="group" aria-label="Language">
+        <span class="lang-pill" id="lang-pill" aria-hidden="true"></span>
+      </div>
+      <span class="data-badge" id="data-badge"></span>
+    </div>
   </div>
 </header>
 
 <main>
 
+  <section id="hero" class="reveal hero" aria-labelledby="hero-h">
+    <h2 id="hero-h" class="hero-title"></h2>
+    <p class="hero-sub" id="hero-sub"></p>
+    <div class="hero-ctas">
+      <a class="cta" id="cta-compare" href="#compare-section"></a>
+      <a class="cta ghost" id="cta-fixtures" href="#fixtures-section"></a>
+    </div>
+    <p class="hero-fast" id="hero-fast"></p>
+  </section>
+
+  <section id="compare-section" class="reveal" data-d="1" aria-labelledby="compare-h">
+    <h2 id="compare-h"></h2>
+    <p class="section-note" id="compare-sub"></p>
+    <div class="cmp-controls">
+      <div class="field">
+        <label id="label-cmp-a" for="cmp-a"></label>
+        <select id="cmp-a"></select>
+      </div>
+      <div class="vs-badge" id="cmp-vs" aria-hidden="true"></div>
+      <div class="field">
+        <label id="label-cmp-b" for="cmp-b"></label>
+        <select id="cmp-b"></select>
+      </div>
+    </div>
+    <p class="cmp-hint" id="cmp-empty"></p>
+    <p class="error" id="cmp-error" hidden></p>
+    <div class="cmp-panels" id="cmp-panels" hidden></div>
+    <div class="chips-key-wrap" id="cmp-chipkey"></div>
+    <div class="cmp-recent" id="cmp-recent" hidden></div>
+  </section>
+
+  <section id="fixtures-section" class="reveal" data-d="2" aria-labelledby="fixtures-h">
+    <h2 id="fixtures-h"></h2>
+    <p class="section-note" id="fixtures-sub"></p>
+    <div class="league-tabs" role="tablist" id="fixture-tabs"></div>
+    <ul class="fixtures" id="fixtures-list"></ul>
+    <p class="fixtures-empty" id="fixtures-empty" hidden></p>
+  </section>
+
   <section id="standings-section" class="reveal" aria-labelledby="standings-h">
-    <h2 id="standings-h">Standings</h2>
-    <div class="league-tabs" role="tablist" aria-label="League selector" id="league-tabs"></div>
+    <h2 id="standings-h"></h2>
+    <div class="league-tabs" role="tablist" id="league-tabs"></div>
     <div class="table-wrap">
-      <table id="standings-table" aria-label="League standings">
-        <thead>
-          <tr>
-            <th scope="col">#</th>
-            <th scope="col">Team</th>
-            <th scope="col">P</th>
-            <th scope="col">W</th>
-            <th scope="col">D</th>
-            <th scope="col">L</th>
-            <th scope="col">GF</th>
-            <th scope="col">GA</th>
-            <th scope="col">GD</th>
-            <th scope="col">Pts</th>
-            <th scope="col">Form <span style="font-weight:400">(last 5, oldest → latest)</span></th>
-          </tr>
-        </thead>
+      <table id="standings-table">
+        <thead><tr id="standings-head"></tr></thead>
         <tbody id="standings-body"></tbody>
       </table>
     </div>
     <div class="legend" id="standings-legend"></div>
-    <p class="section-note">Sorted by points, then goal difference, then goals scored. Complete 2025/26 season — all fixtures played except one canceled match (Nantes vs Toulouse).</p>
+    <p class="section-note" id="standings-note"></p>
+    <p class="fresh-note" id="standings-fresh"></p>
   </section>
 
-  <section id="h2h-section" class="reveal" data-d="1" aria-labelledby="h2h-h">
-    <h2 id="h2h-h">Head-to-Head</h2>
-    <p class="section-note">Pick any two teams. If they play in the same league, their past meetings from the 2025/26 season are shown, plus a prediction.</p>
-    <div class="h2h-controls">
-      <div class="field">
-        <label for="team-a">Team A (home side)</label>
-        <select id="team-a"></select>
-      </div>
-      <div class="field">
-        <label for="team-b">Team B (away side)</label>
-        <select id="team-b"></select>
-      </div>
-    </div>
-    <div id="h2h-error" class="error" hidden></div>
-    <div id="h2h-result" class="h2h-panels" hidden>
-      <div class="card">
-        <h3>Past meetings <span class="sub" id="h2h-league"></span></h3>
-        <ul class="meetings" id="h2h-meetings"></ul>
-        <dl class="stat-grid" style="margin-top:0.75rem">
-          <dt>Total goals in these meetings</dt><dd id="h2h-goals">—</dd>
-          <dt>Team A wins</dt><dd id="h2h-awins">—</dd>
-          <dt>Draws</dt><dd id="h2h-draws">—</dd>
-          <dt>Team B wins</dt><dd id="h2h-bwins">—</dd>
-        </dl>
-      </div>
-      <div class="card">
-        <h3>Recent form <span class="sub">last 5, oldest → latest</span></h3>
-        <div class="form-row"><span id="form-a-name"></span><span class="form-chips" id="form-a"></span></div>
-        <div class="form-row"><span id="form-b-name"></span><span class="form-chips" id="form-b"></span></div>
-        <h3 style="margin-top:1rem">Prediction</h3>
-        <div id="pred-bars"></div>
-      </div>
-    </div>
-    <div class="formula tilt" id="formula-box" hidden>
-      <h4>How the prediction is calculated (no black box)</h4>
-      <ol>
-        <li>Take each team's <strong>last 10 league matches</strong> and count wins, draws and losses → each team's win/draw/loss rates. A team's attacking record pushes its own win chance up; a team's <em>loss</em> rate pushes the opponent's win chance up.</li>
-        <li>Take their <strong>head-to-head meetings</strong> this season and count wins for Team A, draws, wins for Team B → head-to-head rates.</li>
-        <li>Blend them: <code>home score = 0.35 × (A win rate) + 0.35 × (B loss rate) + 0.30 × (A head-to-head win rate)</code>, and the same pattern for draw and away win. If the teams never met, the head-to-head part is dropped and the two teams' form count 50/50.</li>
-        <li>Normalize the three scores so they add up to 100%. Percentages are rounded.</li>
-      </ol>
-      <table aria-label="Prediction inputs">
-        <thead><tr><th scope="col">Input</th><th scope="col" style="text-align:right">Team A</th><th scope="col" style="text-align:right">Draw</th><th scope="col" style="text-align:right">Team B</th></tr></thead>
-        <tbody id="formula-inputs"></tbody>
-      </table>
-      <p style="margin-bottom:0;color:var(--text-muted)">Weights: each team's form 35% + head-to-head 30% (or 50/50 form when no meetings). This is a simple descriptive model, not a betting signal — it only looks at results, not injuries, lineups or xG.</p>
-    </div>
-  </section>
+  <section id="pro-section" class="reveal" data-d="1" aria-labelledby="pro-h">
+    <h2 id="pro-h"><span class="pro-badge" id="pro-badge"></span> <span id="pro-title"></span></h2>
+    <p class="section-note" id="pro-note"></p>
 
-  <section id="charts-section" class="reveal" data-d="2" aria-labelledby="charts-h">
-    <h2 id="charts-h">Charts</h2>
-    <p class="section-note">Charts follow the league selected in the Standings tabs above.</p>
+    <div class="card" id="h2h-card">
+      <h3 id="h2h-h"></h3>
+      <p class="chart-note" id="h2h-sub"></p>
+      <div class="h2h-controls">
+        <div class="field">
+          <label id="label-h2h-a" for="h2h-a"></label>
+          <select id="h2h-a"></select>
+        </div>
+        <div class="field">
+          <label id="label-h2h-b" for="h2h-b"></label>
+          <select id="h2h-b"></select>
+        </div>
+      </div>
+      <p class="error" id="h2h-error" hidden></p>
+      <div id="h2h-result" hidden>
+        <div class="h2h-panels">
+          <div class="sub-card">
+            <h4 id="h2h-meetings-h"></h4>
+            <ul class="meetings" id="h2h-meetings"></ul>
+            <dl class="stat-grid" id="h2h-stats"></dl>
+          </div>
+          <div class="sub-card">
+            <h4 id="h2h-form-h"></h4>
+            <div class="form-row"><span id="form-a-name"></span><span class="form-chips" id="form-a"></span></div>
+            <div class="form-row"><span id="form-b-name"></span><span class="form-chips" id="form-b"></span></div>
+            <h4 id="h2h-pred-h"></h4>
+            <div id="pred-bars"></div>
+            <details class="method" id="method-details">
+              <summary id="method-summary"></summary>
+              <div class="method-body" id="method-body"></div>
+            </details>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div class="chart-wrap tilt">
-      <h3>Points race — cumulative points per matchday</h3>
-      <p class="chart-note">Toggle up to 5 teams. X = matchday, Y = total points after that matchday.</p>
+      <h3 id="trend-h"></h3>
+      <p class="chart-note" id="trend-note"></p>
       <div class="chart-controls" id="trend-toggles"></div>
       <div id="trend-chart"></div>
       <div class="chart-legend" id="trend-legend"></div>
     </div>
 
     <div class="chart-wrap tilt">
-      <h3>Goals for vs goals against</h3>
-      <p class="chart-note">Season totals per team, sorted by goals scored.</p>
+      <h3 id="gfga-h"></h3>
+      <p class="chart-note" id="gfga-note"></p>
       <div id="gfga-chart"></div>
-      <div class="chart-legend">
-        <span><span class="key" style="background:var(--bar-gf)"></span>Goals for</span>
-        <span><span class="key" style="background:var(--bar-ga)"></span>Goals against</span>
-      </div>
+      <div class="chart-legend" id="gfga-legend"></div>
     </div>
   </section>
 
 </main>
 
 <footer>
-  Hala — static football analytics. Data: openfootball/football.json (2025/26 season, frozen snapshot). No tracking, no network requests.
+  <p id="footer-text"></p>
+  <p id="footer-data"></p>
+  <p id="footer-fresh"></p>
 </footer>
 
+<noscript>
+  <div class="noscript">
+    <p><strong>Hala</strong> — Football, made simple · كرة القدم، ببساطة · فوتبال، ساده و رو</p>
+    <p>This page needs JavaScript to render the tables and charts. / برای نمایش جدول‌ها و نمودارها جاوااسکریپت لازم است.</p>
+  </div>
+</noscript>
+
+<script src="i18n.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
 <script>
-/* Hala — motion layer (design polish). Independent of app.js: it only
-   adds classes and inline transforms, and never touches app state.
-   Bails out entirely under prefers-reduced-motion; without JS the page
-   is fully visible and static. Zero external requests. */
+/* Hala v2 — motion layer. Independent of app.js: adds classes and inline
+   transforms only, never touches app state. Bails out entirely under
+   prefers-reduced-motion; without JS the page is fully visible and static.
+   Zero external requests. */
 (function () {
   'use strict';
   var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
