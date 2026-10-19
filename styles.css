@@ -303,6 +303,13 @@ html[dir="rtl"] section > h2::after {
   max-width: 70ch;
 }
 
+.tz-note {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: -0.5rem 0 var(--space-3);
+  max-width: 70ch;
+}
+
 .fresh-note {
   color: var(--text-muted);
   font-size: 0.85rem;
