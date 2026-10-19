@@ -43,6 +43,14 @@
   <section id="compare-section" class="reveal" data-d="1" aria-labelledby="compare-h">
     <h2 id="compare-h"></h2>
     <p class="section-note" id="compare-sub"></p>
+    <div class="scope-row">
+      <span class="scope-label" id="scope-label"></span>
+      <div class="scope-chips" id="scope-chips" role="group"></div>
+    </div>
+    <div class="rivalries" id="rivalries" hidden>
+      <h3 class="rivalries-h" id="rivalries-h"></h3>
+      <div class="rivalry-cards" id="rivalry-cards"></div>
+    </div>
     <div class="cmp-controls">
       <div class="field">
         <label id="label-cmp-a" for="cmp-a"></label>
@@ -61,6 +69,11 @@
     <div class="cmp-recent" id="cmp-recent" hidden></div>
   </section>
 
+  <section id="hub-section" class="reveal" aria-labelledby="hub-h" hidden>
+    <button class="back-btn" id="hub-back" type="button"></button>
+    <div id="hub-body"></div>
+  </section>
+
   <section id="fixtures-section" class="reveal" data-d="2" aria-labelledby="fixtures-h">
     <h2 id="fixtures-h"></h2>
     <p class="section-note" id="fixtures-sub"></p>
@@ -68,11 +81,16 @@
     <div class="league-tabs" role="tablist" id="fixture-tabs"></div>
     <ul class="fixtures" id="fixtures-list"></ul>
     <p class="fixtures-empty" id="fixtures-empty" hidden></p>
+    <button class="more-btn" id="fixtures-more" type="button" hidden></button>
   </section>
 
   <section id="standings-section" class="reveal" aria-labelledby="standings-h">
     <h2 id="standings-h"></h2>
     <div class="league-tabs" role="tablist" id="league-tabs"></div>
+    <div class="seg-row">
+      <span class="seg-label" id="standings-mode-label"></span>
+      <div class="seg-toggle" id="standings-mode" role="group"></div>
+    </div>
     <div class="table-wrap">
       <table id="standings-table">
         <thead><tr id="standings-head"></tr></thead>
@@ -81,7 +99,32 @@
     </div>
     <div class="legend" id="standings-legend"></div>
     <p class="section-note" id="standings-note"></p>
+    <p class="tap-hint" id="tap-hint"></p>
     <p class="fresh-note" id="standings-fresh"></p>
+  </section>
+
+  <section id="results-section" class="reveal" aria-labelledby="results-h">
+    <h2 id="results-h"></h2>
+    <p class="section-note" id="results-sub"></p>
+    <div class="league-tabs" role="tablist" id="results-tabs"></div>
+    <div class="md-stepper">
+      <button class="step-btn" id="md-prev" type="button"></button>
+      <span class="md-label" id="md-label"></span>
+      <button class="step-btn" id="md-next" type="button"></button>
+    </div>
+    <ul class="fixtures" id="results-list"></ul>
+  </section>
+
+  <section id="scorers-section" class="reveal" aria-labelledby="scorers-h">
+    <h2 id="scorers-h"></h2>
+    <p class="section-note" id="scorers-sub"></p>
+    <div class="league-tabs" role="tablist" id="scorers-tabs"></div>
+    <div class="table-wrap">
+      <table id="scorers-table">
+        <thead><tr id="scorers-head"></tr></thead>
+        <tbody id="scorers-body"></tbody>
+      </table>
+    </div>
   </section>
 
   <section id="pro-section" class="reveal" data-d="1" aria-labelledby="pro-h">
