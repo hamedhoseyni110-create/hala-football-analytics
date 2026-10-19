@@ -1537,3 +1537,125 @@ tbody tr.hl td {
   }
   #scorers-table thead th:nth-child(2) { background: var(--surface-2); }
 }
+
+/* ============================================================
+   Hala v4 — match-detail drawer + clickable fixture rows
+   ============================================================ */
+
+/* clickable fixture rows: the li keeps the card, the button fills it */
+.fixtures li.fx-row { padding: 0; }
+
+.fx-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 0.7rem 1rem;
+  background: none;
+  border: none;
+  border-radius: 12px;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.fx-btn .fx-caret::after {
+  content: '▾';
+  display: inline-block;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  transition: transform var(--dur-1) var(--ease);
+}
+
+.fx-btn[aria-expanded="true"] .fx-caret::after { transform: rotate(180deg); }
+
+/* the inline drawer: one <li> right under its fixture row */
+.fixtures li.fx-drawer {
+  display: block;
+  min-width: 0; /* grid items default to min-width:auto: without this the drawer
+                   forces 95px horizontal page overflow on mobile */
+  border-color: rgba(0, 230, 118, 0.35);
+}
+
+.drawer h4 {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: 0.95rem;
+  color: var(--accent-strong);
+}
+
+.drawer h4:first-of-type { margin-top: var(--space-2); }
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.drawer-score {
+  color: var(--accent-strong);
+  font-size: 1.2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer .seg-toggle { margin-bottom: var(--space-1); }
+
+.drawer-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+
+.drawer-table th,
+.drawer-table td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer-table th:first-child,
+.drawer-table td:first-child { text-align: start; color: var(--text-muted); font-weight: 400; }
+
+.drawer-last5 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.last5-col h5 { margin: 0 0 0.4rem; font-size: 0.9rem; }
+
+.drawer-last5 ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.drawer-last5 li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.drawer-next { margin-top: var(--space-1); }
+
+.drawer .method { margin-top: var(--space-1); }
+
+@media (max-width: 640px) {
+  .drawer-last5 { grid-template-columns: 1fr; }
+}

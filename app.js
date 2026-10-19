@@ -25,7 +25,9 @@ var state = {
   fxAll: false,  // fixtures: show the full upcoming list
   hl: null,      // scope-lock highlight: {comp, tids:[..]}
   resMD: null,   // results browser matchday (null = latest finished)
-  hub: null      // team hub: {comp, tid}
+  hub: null,      // team hub: {comp, tid}
+  drawer: null,   // match drawer: {comp, key} — one open at a time
+  drawerMode: 'overall' // drawer stats basis: 'overall' | 'home' | 'away'
 };
 
 var LS_KEY = 'hala.lang';
@@ -283,6 +285,110 @@ function nextFixturesFor(comp, tid, n) {
   return out.slice(0, n);
 }
 
+/* ---------- v4: match drawer (pure computations) ---------- */
+
+/* unique key for a fixture row: comp + home + away + kickoff */
+function fxKey(m) { return m[0] + ':' + m[1] + ':' + m[6]; }
+
+/* all meetings (any status) between two teams, most recent first */
+function h2hAll(comp, tidA, tidB) {
+  var out = [];
+  for (var i = 0; i < comp.m.length; i++) {
+    var m = comp.m[i];
+    if ((m[0] === tidA && m[1] === tidB) || (m[0] === tidB && m[1] === tidA)) out.push(m);
+  }
+  out.sort(function (a, b) { return a[6] < b[6] ? 1 : (a[6] > b[6] ? -1 : 0); });
+  return out;
+}
+
+/* finished matches filtered by venue: 'overall' | 'home' | 'away' */
+function venueMatches(comp, tid, venue) {
+  var ms = teamMatches(comp, tid);
+  if (venue === 'home') return ms.filter(function (m) { return m[0] === tid; });
+  if (venue === 'away') return ms.filter(function (m) { return m[1] === tid; });
+  return ms;
+}
+
+/* season stat block for the drawer compare: wins, GF, GA, BTTS%, failed%, CS */
+function teamStatBlock(comp, tid, venue) {
+  var ms = venueMatches(comp, tid, venue), n = ms.length;
+  var w = 0, gf = 0, ga = 0, btts = 0, fts = 0, cs = 0;
+  for (var i = 0; i < n; i++) {
+    var m = ms[i];
+    var f = m[0] === tid ? m[4] : m[5], a = m[0] === tid ? m[5] : m[4];
+    if (f > a) w++;
+    gf += f; ga += a;
+    if (f > 0 && a > 0) btts++;
+    if (f === 0) fts++;
+    if (a === 0) cs++;
+  }
+  return {
+    n: n, w: w, gf: gf, ga: ga, cs: cs,
+    btts: n ? btts / n * 100 : 0,
+    fts: n ? fts / n * 100 : 0
+  };
+}
+
+/* over/under ladder from total goals in finished matches */
+function overUnder(comp, tid, venue) {
+  var ms = venueMatches(comp, tid, venue), n = ms.length;
+  var o15 = 0, o25 = 0, o35 = 0;
+  for (var i = 0; i < n; i++) {
+    var tot = ms[i][4] + ms[i][5];
+    if (tot >= 2) o15++;   /* over 1.5 <=> total >= 2 */
+    if (tot >= 3) o25++;
+    if (tot >= 4) o35++;
+  }
+  return {
+    n: n,
+    o15: n ? o15 / n * 100 : 0,
+    o25: n ? o25 / n * 100 : 0,
+    o35: n ? o35 / n * 100 : 0
+  };
+}
+
+/* top scorer of a team in this competition (comp.scorers is goals-desc), or null */
+function topScorerOf(comp, tid) {
+  var ss = comp.scorers || [];
+  for (var i = 0; i < ss.length; i++) {
+    if (ss[i][1] === tid) return ss[i];
+  }
+  return null;
+}
+
+/* which competition do two picked teams share?
+   same domestic league -> that league;
+   else a UCL meeting this season (played or scheduled) -> 'CL';
+   else null (no forced scope) */
+function sharedCompFor(A, B) {
+  if (!A || !B) return null;
+  if (A.comp.id === B.comp.id) return A.tid === B.tid ? null : A.comp.id;
+  var cl = compById('CL');
+  for (var i = 0; i < cl.m.length; i++) {
+    var m = cl.m[i];
+    if ((m[0] === A.tid && m[1] === B.tid) || (m[0] === B.tid && m[1] === A.tid)) return 'CL';
+  }
+  return null;
+}
+
+/* snap the shared tabs to compId and highlight the two teams */
+function applyScopeLock(compId, tids) {
+  state.hl = { comp: compId, tids: tids };
+  if (state.comp !== compId) {
+    state.comp = compId;
+    state.trendSel = [];
+    state.resMD = null;
+    state.fxAll = false;
+    state.drawer = null;
+    renderCompTabs();
+    renderFixtures();
+    renderResults();
+    renderScorers();
+    renderCharts();
+  }
+  renderStandings();
+}
+
 function finishedMatchdays(comp) {
   var set = {};
   for (var i = 0; i < comp.m.length; i++) {
@@ -458,6 +564,8 @@ function wireCompTabs(el) {
           state.hl = null;      /* manual switch overrides scope-lock */
           state.resMD = null;
           state.fxAll = false;
+          state.drawer = null;  /* drawers belong to one competition */
+          state.drawerMode = 'overall';
           renderCompTabs();
           renderFixtures();
           renderStandings();
@@ -493,15 +601,15 @@ var RIVALRIES = [
 ];
 
 function pickerOptionsHTML() {
-  /* One option per team id. DATA.comps order is leagues first, CL last,
-     so a team in both keeps its league option; CL-only teams keep the CL one.
+  /* One option per team per competition, grouped by competition.
+     The value is comp-scoped (e.g. "CL:524"), so a team in both its
+     league and the UCL appears under each — the optgroup label tells
+     them apart, and cross-competition picks (compare/H2H scope-lock v2)
+     always resolve to a real option.
      The league-scope chips narrow the list to a single competition. */
-  var seen = {};
   var comps = state.scope === 'ALL' ? DATA.comps : [compById(state.scope)];
   return comps.map(function (c) {
     var opts = c.teams.map(function (tm) {
-      if (seen[tm[0]]) return '';
-      seen[tm[0]] = true;
       return '<option value="' + c.id + ':' + tm[0] + '">' + esc(tm[1]) + '</option>';
     }).join('');
     return opts ? '<optgroup label="' + esc(t('competition.' + c.id)) + '">' + opts + '</optgroup>' : '';
@@ -542,6 +650,24 @@ function setScope(id) {
     var P = parsePicker(state[k]);
     if (P && id !== 'ALL' && P.comp.id !== id) state[k] = '';
   });
+  state.drawer = null;
+  if (id !== 'ALL') {
+    /* smart nav: one tap also lands the shared tabs on that league's
+       table and jumps straight to it — no hunting through the page */
+    state.comp = id;
+    state.trendSel = [];
+    state.hl = null;
+    state.resMD = null;
+    state.fxAll = false;
+    renderCompTabs();
+    renderFixtures();
+    renderResults();
+    renderScorers();
+    renderCharts();
+    renderStandings();
+    var sec = $('standings-section');
+    if (sec && sec.scrollIntoView) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   fillPickers();
   renderScope();
   renderComparePanels();
@@ -701,30 +827,28 @@ function comparePanelRender(P, other) {
 
 function renderComparePanels() { renderCompare(); }
 
-/* Central compare setter with scope-lock (M1):
-   when both teams share a competition, the shared tabs snap to it,
-   both teams are highlighted in the table, and H2H auto-fills.
+/* Central compare setter with scope-lock v2:
+   when both teams share a competition the shared tabs snap to it;
+   a cross-league pair with a UCL meeting this season snaps to the UCL
+   (H2H pickers are rewritten to their CL entries); otherwise no forcing.
+   Both teams are highlighted in the table, and H2H auto-fills.
    Manual tab switches afterwards override — no hard lock. */
 function setCompare(aVal, bVal) {
   state.cmpA = aVal; state.cmpB = bVal;
   $('cmp-a').value = aVal; $('cmp-b').value = bVal;
   renderComparePanels();
   var A = parsePicker(aVal), B = parsePicker(bVal);
-  if (A && B && A.comp.id === B.comp.id && A.tid !== B.tid) {
-    state.hl = { comp: A.comp.id, tids: [A.tid, B.tid] };
-    if (state.comp !== A.comp.id) {
-      state.comp = A.comp.id;
-      state.trendSel = [];
-      renderCompTabs();
-      renderFixtures();
-      renderResults();
-      renderScorers();
-      renderCharts();
+  var shared = sharedCompFor(A, B);
+  if (shared && A && B) {
+    /* H2H auto-fill: same comp -> as picked; cross-league UCL pair -> CL entries */
+    var hA = aVal, hB = bVal;
+    if (A.comp.id !== B.comp.id && shared === 'CL') {
+      hA = 'CL:' + A.tid;
+      hB = 'CL:' + B.tid;
     }
-    renderStandings();
-    /* H2H auto-fill */
-    state.h2hA = aVal; state.h2hB = bVal;
-    $('h2h-a').value = aVal; $('h2h-b').value = bVal;
+    applyScopeLock(shared, [A.tid, B.tid]);
+    state.h2hA = hA; state.h2hB = hB;
+    $('h2h-a').value = hA; $('h2h-b').value = hB;
     renderH2H();
   } else {
     if (state.hl) { state.hl = null; renderStandings(); }
@@ -739,7 +863,258 @@ function recentTeamHTML(P) {
   return '<div class="recent-team"><h5>' + bdi(teamName(P.comp, P.tid)) + '</h5><ul>' + items + '</ul></div>';
 }
 
-/* ---------- fixtures ---------- */
+/* ---------- v4: match drawer ---------- */
+
+/* prediction bars shared by the H2H section and the match drawer */
+function predBarsHTML(nameA, nameB, P) {
+  function bar(cls, label, pctVal) {
+    var pct = Math.round(pctVal * 10) / 10;
+    return '<div class="pred-bar"><div class="label"><span>' + label +
+      '</span><strong><bdi>' + esc(pctStr(pct)) + '</bdi></strong></div>' +
+      '<div class="track"><div class="fill ' + cls + '" style="width:' + pct.toFixed(1) + '%"></div></div></div>';
+  }
+  return bar('home', t('h2h.predHomeWin', { a: bdi(nameA) }), P.pHome) +
+    bar('draw', esc(t('h2h.predDraw')), P.pDraw) +
+    bar('away', t('h2h.predAwayWin', { b: bdi(nameB) }), P.pAway);
+}
+
+/* methodology body shared by the H2H section and the match drawer */
+function methodBodyHTML(comp, nameA, nameB, P) {
+  function pct(x) { return pctStr(x * 100); }
+  function wdl(x) { return fmtN(x.w) + '/' + fmtN(x.d) + '/' + fmtN(x.l); }
+  var rows =
+    '<tr><td>' + t('method.rowFormA', { a: bdi(nameA), n: '<bdi>' + esc(fmtN(P.aForm.n)) + '</bdi>' }) + '</td>' +
+    '<td class="num"><bdi>' + esc(wdl(P.aForm)) + '</bdi> → <bdi>' + esc(pct(P.aForm.wR)) + ' / ' + esc(pct(P.aForm.dR)) + ' / ' + esc(pct(P.aForm.lR)) + '</bdi></td>' +
+    '<td class="num">—</td><td class="num">—</td></tr>' +
+    '<tr><td>' + t('method.rowFormB', { b: bdi(nameB), n: '<bdi>' + esc(fmtN(P.bForm.n)) + '</bdi>' }) + '</td>' +
+    '<td class="num">—</td><td class="num">—</td>' +
+    '<td class="num"><bdi>' + esc(wdl(P.bForm)) + '</bdi> → <bdi>' + esc(pct(P.bForm.wR)) + ' / ' + esc(pct(P.bForm.dR)) + ' / ' + esc(pct(P.bForm.lR)) + '</bdi></td></tr>' +
+    '<tr><td>' + t('method.rowH2H', { n: '<bdi>' + esc(fmtN(P.h2hN)) + '</bdi>' }) + '</td>' +
+    '<td class="num"><bdi>' + esc(fmtN(P.aWins)) + '</bdi> → <bdi>' + esc(pct(P.hA)) + '</bdi></td>' +
+    '<td class="num"><bdi>' + esc(fmtN(P.draws)) + '</bdi> → <bdi>' + esc(pct(P.hD)) + '</bdi></td>' +
+    '<td class="num"><bdi>' + esc(fmtN(P.bWins)) + '</bdi> → <bdi>' + esc(pct(P.hB)) + '</bdi></td></tr>' +
+    '<tr><td><strong>' + esc(t('method.rowResult')) + '</strong></td>' +
+    '<td class="num"><strong><bdi>' + esc(pctStr(P.pHome)) + '</bdi></strong></td>' +
+    '<td class="num"><strong><bdi>' + esc(pctStr(P.pDraw)) + '</bdi></strong></td>' +
+    '<td class="num"><strong><bdi>' + esc(pctStr(P.pAway)) + '</bdi></strong></td></tr>';
+  return '<h4>' + esc(t('method.title')) + '</h4>' +
+    '<ol><li>' + t('method.step1') + '</li><li>' + t('method.step2') + '</li>' +
+    '<li>' + t('method.step3') + '</li><li>' + t('method.step4') + '</li></ol>' +
+    '<p><code dir="ltr">' + esc(t('method.formula')) + '</code></p>' +
+    '<table><thead><tr><th scope="col">' + esc(t('method.thInput')) + '</th>' +
+    '<th scope="col" class="num">' + esc(t('method.thHome')) + '</th>' +
+    '<th scope="col" class="num">' + esc(t('method.thDraw')) + '</th>' +
+    '<th scope="col" class="num">' + esc(t('method.thAway')) + '</th></tr></thead>' +
+    '<tbody>' + rows + '</tbody></table>' +
+    '<p>' + esc(t('method.weights')) + '</p>' +
+    '<p class="disclaimer">' + esc(t('method.disclaimer')) + '</p>';
+}
+
+/* one fixture row: the whole row is a button toggling the inline drawer.
+   Finished rows show the FT score; upcoming rows the kickoff. */
+function fxRowHTML(comp, m) {
+  var finished = m[3] === 0;
+  var k = fxKey(m);
+  var open = state.drawer && state.drawer.comp === comp.id && state.drawer.key === k;
+  var teamsInner = finished
+    ? bdi(teamName(comp, m[0])) + ' <strong><bdi>' + esc(fmtN(m[4])) + '–' + esc(fmtN(m[5])) + '</bdi></strong> ' + bdi(teamName(comp, m[1]))
+    : bdi(teamName(comp, m[0])) + '<span class="vs">' + esc(t('compare.vs')) + '</span>' + bdi(teamName(comp, m[1]));
+  var metaInner = finished
+    ? '<span class="date"><bdi>' + esc(fmtDate(m[6])) + '</bdi></span>'
+    : '<span class="md-chip">' + t('fixtures.matchday', { n: '<bdi>' + esc(fmtN(m[2])) + '</bdi>' }) +
+      '</span><bdi>' + esc(fmtDT(m[6])) + '</bdi>';
+  var row = '<li class="fx-row"><button type="button" class="fx-btn" data-fx="' + esc(k) + '"' +
+    ' aria-expanded="' + (open ? 'true' : 'false') + '" aria-label="' + esc(t('drawer.toggle')) + '">' +
+    '<span class="fixture-teams">' + teamsInner + '</span>' +
+    '<span class="fixture-meta">' + metaInner + '<span class="fx-caret" aria-hidden="true"></span></span>' +
+    '</button></li>';
+  if (open) row += '<li class="fx-drawer">' + drawerHTML(comp, m) + '</li>';
+  return row;
+}
+
+function last5ColHTML(comp, tid) {
+  var ms = teamMatches(comp, tid).slice(-5).reverse();
+  var lis = ms.length ? ms.map(function (m) {
+    var r = resultFor(m, tid);
+    var venue = m[0] === tid ? t('standings.modeHome') : t('standings.modeAway');
+    return '<li><span class="chip ' + r.toLowerCase() + '">' + r + '</span>' +
+      '<span>' + bdi(teamName(comp, m[0])) + ' <strong><bdi>' + esc(fmtN(m[4])) + '–' + esc(fmtN(m[5])) +
+      '</bdi></strong> ' + bdi(teamName(comp, m[1])) + '</span>' +
+      '<span class="date"><bdi>' + esc(fmtDate(m[6])) + '</bdi> · ' + esc(venue) + '</span></li>';
+  }).join('') : '<li class="quiet">' + esc(t('compare.formEmpty')) + '</li>';
+  return '<div class="last5-col"><h5>' + bdi(teamName(comp, tid)) + '</h5><ul>' + lis + '</ul></div>';
+}
+
+function nextMatchLI(comp, m) {
+  return '<li><span class="fixture-teams">' + bdi(teamName(comp, m[0])) +
+    '<span class="vs">' + esc(t('compare.vs')) + '</span>' + bdi(teamName(comp, m[1])) + '</span>' +
+    '<span class="fixture-meta"><bdi>' + esc(fmtDT(m[6])) + '</bdi></span></li>';
+}
+
+/* the inline match-detail drawer — everything computed from data.js, nothing invented */
+function drawerHTML(comp, m) {
+  var hId = m[0], aId = m[1], finished = m[3] === 0;
+  var nameA = teamName(comp, hId), nameB = teamName(comp, aId);
+  var out = '<div class="drawer">';
+
+  /* header: FT score prepended for finished matches */
+  var headMid = finished
+    ? ' <strong class="drawer-score"><bdi>' + esc(fmtN(m[4])) + '–' + esc(fmtN(m[5])) + '</bdi></strong> '
+    : '<span class="vs">' + esc(t('compare.vs')) + '</span>';
+  out += '<div class="drawer-head"><span class="fixture-teams">' + bdi(nameA) + headMid + bdi(nameB) + '</span>' +
+    '<span class="drawer-meta"><span class="md-chip">' +
+    t('fixtures.matchday', { n: '<bdi>' + esc(fmtN(m[2])) + '</bdi>' }) + '</span><bdi>' +
+    esc(finished ? fmtDate(m[6]) : fmtDT(m[6])) + '</bdi></span></div>';
+
+  /* 1. win probability (scheduled matches only) + transparent methodology */
+  if (!finished) {
+    var P = predict(comp, hId, aId);
+    out += '<h4>' + esc(t('h2h.prediction')) + '</h4>' + predBarsHTML(nameA, nameB, P) +
+      '<details class="method drawer-method"><summary>' + esc(t('method.show')) + '</summary>' +
+      '<div class="method-body">' + methodBodyHTML(comp, nameA, nameB, P) + '</div></details>';
+  }
+
+  /* 2. head-to-head this season: played + scheduled, most recent first */
+  var meetings = h2hAll(comp, hId, aId);
+  out += '<h4>' + esc(t('h2h.pastMeetings')) + '</h4>';
+  out += meetings.length
+    ? '<ul class="meetings">' + meetings.map(function (mm) {
+        var inner = mm[3] === 0
+          ? bdi(teamName(comp, mm[0])) + ' <strong><bdi>' + esc(fmtN(mm[4])) + '–' + esc(fmtN(mm[5])) +
+            '</bdi></strong> ' + bdi(teamName(comp, mm[1]))
+          : bdi(teamName(comp, mm[0])) + ' <span class="vs">' + esc(t('compare.vs')) + '</span> ' +
+            bdi(teamName(comp, mm[1])) + ' <span class="md-chip">' + esc(t('drawer.upcoming')) + '</span>';
+        return '<li><span>' + inner + '</span><span class="date"><bdi>' + esc(fmtDate(mm[6])) + '</bdi></span></li>';
+      }).join('') + '</ul>'
+    : '<p class="quiet">' + esc(t('h2h.noMeetings')) + '</p>';
+
+  /* 3. season-stats compare with Overall / Home / Away chips */
+  var mode = state.drawerMode;
+  function modeChip(v, key) {
+    return '<button type="button" class="seg-btn" data-dmode="' + v + '" aria-pressed="' +
+      (mode === v) + '">' + esc(t(key)) + '</button>';
+  }
+  out += '<h4>' + esc(t('drawer.modeLabel')) + '</h4>' +
+    '<div class="seg-toggle" role="group" aria-label="' + esc(t('drawer.modeLabel')) + '">' +
+    modeChip('overall', 'standings.modeAll') + modeChip('home', 'standings.modeHome') +
+    modeChip('away', 'standings.modeAway') + '</div>';
+  var sA = teamStatBlock(comp, hId, mode), sB = teamStatBlock(comp, aId, mode);
+  function cell(s, fmt) { return s.n ? '<bdi>' + esc(fmt(s)) + '</bdi>' : '<bdi>—</bdi>'; }
+  function srow(label, fmt) {
+    return '<tr><td>' + esc(label) + '</td><td>' + cell(sA, fmt) + '</td><td>' + cell(sB, fmt) + '</td></tr>';
+  }
+  out += '<div class="table-wrap"><table class="drawer-table"><thead><tr><th scope="col"></th>' +
+    '<th scope="col">' + bdi(nameA) + '</th><th scope="col">' + bdi(nameB) + '</th></tr></thead><tbody>' +
+    srow(t('compare.stat.won'), function (s) { return fmtN(s.w); }) +
+    srow(t('compare.stat.gf'), function (s) { return fmtN(s.gf); }) +
+    srow(t('compare.stat.ga'), function (s) { return fmtN(s.ga); }) +
+    srow(t('compare.stat.btts'), function (s) { return pctStr(s.btts); }) +
+    srow(t('drawer.failedToScore'), function (s) { return pctStr(s.fts); }) +
+    srow(t('compare.stat.cs'), function (s) { return fmtN(s.cs); }) +
+    '</tbody></table></div>';
+
+  /* 4. over/under ladder — follows the same Overall / Home / Away basis */
+  var ouA = overUnder(comp, hId, mode), ouB = overUnder(comp, aId, mode);
+  function ourow(label, f) {
+    return '<tr><td>' + esc(label) + '</td><td>' + cell(ouA, f) + '</td><td>' + cell(ouB, f) + '</td></tr>';
+  }
+  out += '<h4>' + esc(t('drawer.overUnder')) + '</h4>' +
+    '<div class="table-wrap"><table class="drawer-table"><thead><tr><th scope="col"></th>' +
+    '<th scope="col">' + bdi(nameA) + '</th><th scope="col">' + bdi(nameB) + '</th></tr></thead><tbody>' +
+    ourow(t('drawer.over15'), function (s) { return pctStr(s.o15); }) +
+    ourow(t('drawer.over25'), function (s) { return pctStr(s.o25); }) +
+    ourow(t('drawer.over35'), function (s) { return pctStr(s.o35); }) +
+    '</tbody></table></div>';
+
+  /* 5. last-5 per team, side by side */
+  out += '<h4>' + esc(t('compare.stat.form')) + '</h4><div class="drawer-last5">' +
+    last5ColHTML(comp, hId) + last5ColHTML(comp, aId) + '</div>';
+
+  /* 6. top scorer per team (section omitted when neither has one) */
+  var scA = topScorerOf(comp, hId), scB = topScorerOf(comp, aId);
+  if (scA || scB) {
+    out += '<h4>' + esc(t('drawer.topScorer')) + '</h4><div class="drawer-last5">';
+    [[scA, hId], [scB, aId]].forEach(function (pair) {
+      var sc = pair[0], tid = pair[1];
+      out += '<div class="last5-col"><h5>' + bdi(teamName(comp, tid)) + '</h5>' +
+        (sc ? '<p><bdi>' + esc(sc[0]) + '</bdi> · <strong><bdi>' + esc(fmtN(sc[2])) + '</bdi></strong> ' +
+          esc(t('scorers.th.goals')) + '</p>'
+          : '<p class="quiet">—</p>') + '</div>';
+    });
+    out += '</div>';
+  }
+
+  /* 7. next match per team — excluding the drawer's own fixture, which is
+     usually the team's next upcoming fixture already */
+  var selfKey = fxKey(m);
+  function nextAfter(tid) {
+    var cands = nextFixturesFor(comp, tid, 10);
+    for (var i = 0; i < cands.length; i++) {
+      if (fxKey(cands[i]) !== selfKey) return cands[i];
+    }
+    return null;
+  }
+  var nxA = nextAfter(hId), nxB = nextAfter(aId);
+  if (nxA || nxB) {
+    out += '<h4>' + esc(t('drawer.nextMatch')) + '</h4><ul class="fixtures drawer-next">';
+    if (nxA) out += nextMatchLI(comp, nxA);
+    if (nxB && nxB !== nxA) out += nextMatchLI(comp, nxB);
+    out += '</ul>';
+  }
+
+  return out + '</div>';
+}
+
+/* wire one fixtures/results list: row buttons toggle the single drawer,
+   mode chips reshape the stats table, methodology details get their label */
+function wireDrawer(list, comp) {
+  var btns = list.querySelectorAll('.fx-btn');
+  for (var i = 0; i < btns.length; i++) {
+    (function (btn) {
+      btn.addEventListener('click', function () {
+        var k = btn.getAttribute('data-fx');
+        if (state.drawer && state.drawer.comp === comp.id && state.drawer.key === k) {
+          state.drawer = null;   /* same fixture: close */
+        } else {
+          state.drawer = { comp: comp.id, key: k };  /* one drawer: it moves */
+          state.drawerMode = 'overall';
+        }
+        renderFixtures();
+        renderResults();
+        var dr = list.querySelector('.fx-drawer');
+        if (dr && dr.scrollIntoView) dr.scrollIntoView({ block: 'nearest' });
+      });
+    })(btns[i]);
+  }
+  var modes = list.querySelectorAll('[data-dmode]');
+  for (var j = 0; j < modes.length; j++) {
+    (function (b) {
+      b.addEventListener('click', function () {
+        state.drawerMode = b.getAttribute('data-dmode');
+        /* keep an open methodology <details> open across the re-render */
+        var detEl = document.querySelector('.drawer-method');
+        var detOpen = !!(detEl && detEl.open);
+        renderFixtures();
+        renderResults();
+        if (detOpen) {
+          var nd = document.querySelector('.drawer-method');
+          if (nd) {
+            nd.open = true;
+            var s = nd.querySelector('summary');
+            if (s) s.textContent = t('method.hide');
+          }
+        }
+      });
+    })(modes[j]);
+  }
+  var det = list.querySelector('.drawer-method');
+  if (det) {
+    det.addEventListener('toggle', function () {
+      var s = det.querySelector('summary');
+      if (s) s.textContent = det.open ? t('method.hide') : t('method.show');
+    });
+  }
+}
 
 function renderFixtures() {
   $('fixtures-h').textContent = t('fixtures.title');
@@ -755,13 +1130,8 @@ function renderFixtures() {
     empty.textContent = t('fixtures.noFixtures');
   } else {
     empty.hidden = true;
-    list.innerHTML = fx.map(function (m) {
-      return '<li><span class="fixture-teams">' + bdi(teamName(comp, m[0])) +
-        '<span class="vs">' + esc(t('compare.vs')) + '</span>' + bdi(teamName(comp, m[1])) + '</span>' +
-        '<span class="fixture-meta"><span class="md-chip">' +
-        t('fixtures.matchday', { n: '<bdi>' + esc(fmtN(m[2])) + '</bdi>' }) +
-        '</span><bdi>' + esc(fmtDT(m[6])) + '</bdi></span></li>';
-    }).join('');
+    list.innerHTML = fx.map(function (m) { return fxRowHTML(comp, m); }).join('');
+    wireDrawer(list, comp);
   }
   /* show more / less (m3) */
   var more = $('fixtures-more');
@@ -903,12 +1273,8 @@ function renderResults() {
   next.textContent = t('results.next');
   prev.disabled = md <= mds[0];
   next.disabled = md >= mds[mds.length - 1];
-  list.innerHTML = matchesOfMD(comp, md).map(function (m) {
-    return '<li><span class="fixture-teams">' + bdi(teamName(comp, m[0])) +
-      ' <strong><bdi>' + esc(fmtN(m[4])) + '–' + esc(fmtN(m[5])) + '</bdi></strong> ' +
-      bdi(teamName(comp, m[1])) + '</span>' +
-      '<span class="date"><bdi>' + esc(fmtDate(m[6])) + '</bdi></span></li>';
-  }).join('');
+  list.innerHTML = matchesOfMD(comp, md).map(function (m) { return fxRowHTML(comp, m); }).join('');
+  wireDrawer(list, comp);
 }
 
 function stepResults(dir) {
@@ -1052,19 +1418,27 @@ function renderH2H() {
     return;
   }
   if (A.comp.id !== B.comp.id) {
-    err.hidden = false;
-    err.innerHTML = t('h2h.sameLeague', {
-      a: bdi(teamName(A.comp, A.tid)),
-      leagueA: esc(t('competition.' + A.comp.id)),
-      b: bdi(teamName(B.comp, B.tid)),
-      leagueB: esc(t('competition.' + B.comp.id))
-    });
-    res.hidden = true;
-    return;
+    /* cross-league pair that meets in the UCL: render the UCL head-to-head
+       instead of erroring (scope-lock v2) — the pickers keep the user's
+       own picks, only the rendered competition switches to the UCL */
+    if (sharedCompFor(A, B) !== 'CL') {
+      err.hidden = false;
+      err.innerHTML = t('h2h.sameLeague', {
+        a: bdi(teamName(A.comp, A.tid)),
+        leagueA: esc(t('competition.' + A.comp.id)),
+        b: bdi(teamName(B.comp, B.tid)),
+        leagueB: esc(t('competition.' + B.comp.id))
+      });
+      res.hidden = true;
+      return;
+    }
   }
   err.hidden = true;
 
-  var comp = A.comp;
+  /* the rendered competition: the UCL for cross-league UCL pairs (team ids
+     are global across competitions, so CL entries resolve the same clubs) */
+  var comp = A.comp.id !== B.comp.id ? compById('CL') : A.comp;
+
   var P = predict(comp, A.tid, B.tid);
   var nameA = teamName(comp, A.tid), nameB = teamName(comp, B.tid);
 
@@ -1094,16 +1468,7 @@ function renderH2H() {
 
   /* prediction bars */
   $('h2h-pred-h').textContent = t('h2h.prediction');
-  function bar(cls, label, pctVal) {
-    var pct = Math.round(pctVal * 10) / 10;
-    return '<div class="pred-bar"><div class="label"><span>' + label +
-      '</span><strong><bdi>' + esc(pctStr(pct)) + '</bdi></strong></div>' +
-      '<div class="track"><div class="fill ' + cls + '" style="width:' + pct.toFixed(1) + '%"></div></div></div>';
-  }
-  $('pred-bars').innerHTML =
-    bar('home', t('h2h.predHomeWin', { a: bdi(nameA) }), P.pHome) +
-    bar('draw', esc(t('h2h.predDraw')), P.pDraw) +
-    bar('away', t('h2h.predAwayWin', { b: bdi(nameB) }), P.pAway);
+  $('pred-bars').innerHTML = predBarsHTML(nameA, nameB, P);
 
   renderMethod(comp, nameA, nameB, P);
   res.hidden = false;
@@ -1113,36 +1478,7 @@ function renderMethod(comp, nameA, nameB, P) {
   var det = $('method-details');
   var wasOpen = det.open;
 
-  function pct(x) { return pctStr(x * 100); }
-  function wdl(x) { return fmtN(x.w) + '/' + fmtN(x.d) + '/' + fmtN(x.l); }
-  var rows =
-    '<tr><td>' + t('method.rowFormA', { a: bdi(nameA), n: '<bdi>' + esc(fmtN(P.aForm.n)) + '</bdi>' }) + '</td>' +
-    '<td class="num"><bdi>' + esc(wdl(P.aForm)) + '</bdi> → <bdi>' + esc(pct(P.aForm.wR)) + ' / ' + esc(pct(P.aForm.dR)) + ' / ' + esc(pct(P.aForm.lR)) + '</bdi></td>' +
-    '<td class="num">—</td><td class="num">—</td></tr>' +
-    '<tr><td>' + t('method.rowFormB', { b: bdi(nameB), n: '<bdi>' + esc(fmtN(P.bForm.n)) + '</bdi>' }) + '</td>' +
-    '<td class="num">—</td><td class="num">—</td>' +
-    '<td class="num"><bdi>' + esc(wdl(P.bForm)) + '</bdi> → <bdi>' + esc(pct(P.bForm.wR)) + ' / ' + esc(pct(P.bForm.dR)) + ' / ' + esc(pct(P.bForm.lR)) + '</bdi></td></tr>' +
-    '<tr><td>' + t('method.rowH2H', { n: '<bdi>' + esc(fmtN(P.h2hN)) + '</bdi>' }) + '</td>' +
-    '<td class="num"><bdi>' + esc(fmtN(P.aWins)) + '</bdi> → <bdi>' + esc(pct(P.hA)) + '</bdi></td>' +
-    '<td class="num"><bdi>' + esc(fmtN(P.draws)) + '</bdi> → <bdi>' + esc(pct(P.hD)) + '</bdi></td>' +
-    '<td class="num"><bdi>' + esc(fmtN(P.bWins)) + '</bdi> → <bdi>' + esc(pct(P.hB)) + '</bdi></td></tr>' +
-    '<tr><td><strong>' + esc(t('method.rowResult')) + '</strong></td>' +
-    '<td class="num"><strong><bdi>' + esc(pctStr(P.pHome)) + '</bdi></strong></td>' +
-    '<td class="num"><strong><bdi>' + esc(pctStr(P.pDraw)) + '</bdi></strong></td>' +
-    '<td class="num"><strong><bdi>' + esc(pctStr(P.pAway)) + '</bdi></strong></td></tr>';
-
-  $('method-body').innerHTML =
-    '<h4>' + esc(t('method.title')) + '</h4>' +
-    '<ol><li>' + t('method.step1') + '</li><li>' + t('method.step2') + '</li>' +
-    '<li>' + t('method.step3') + '</li><li>' + t('method.step4') + '</li></ol>' +
-    '<p><code dir="ltr">' + esc(t('method.formula')) + '</code></p>' +
-    '<table><thead><tr><th scope="col">' + esc(t('method.thInput')) + '</th>' +
-    '<th scope="col" class="num">' + esc(t('method.thHome')) + '</th>' +
-    '<th scope="col" class="num">' + esc(t('method.thDraw')) + '</th>' +
-    '<th scope="col" class="num">' + esc(t('method.thAway')) + '</th></tr></thead>' +
-    '<tbody>' + rows + '</tbody></table>' +
-    '<p>' + esc(t('method.weights')) + '</p>' +
-    '<p class="disclaimer">' + esc(t('method.disclaimer')) + '</p>';
+  $('method-body').innerHTML = methodBodyHTML(comp, nameA, nameB, P);
   det.open = wasOpen;
   var summary = $('method-summary');
   summary.textContent = det.open ? t('method.hide') : t('method.show');
@@ -1152,6 +1488,17 @@ function renderMethod(comp, nameA, nameB, P) {
       summary.textContent = det.open ? t('method.hide') : t('method.show');
     });
   }
+}
+
+/* scope-lock v2 for the H2H section: land the shared tabs on the shared
+   competition (a cross-league pair with a UCL meeting lands on the UCL).
+   NOTE: pickers are never rewritten here — rewriting on a single-picker
+   change would clobber the user's pick against the other picker's stale
+   value. renderH2H itself renders the UCL meetings for such pairs. */
+function snapH2HTabs() {
+  var A = parsePicker(state.h2hA), B = parsePicker(state.h2hB);
+  var shared = sharedCompFor(A, B);
+  if (shared) applyScopeLock(shared, [A.tid, B.tid]);
 }
 
 /* ---------- charts ---------- */
@@ -1403,8 +1750,8 @@ function init() {
 
   $('cmp-a').addEventListener('change', function (e) { setCompare(e.target.value, state.cmpB); });
   $('cmp-b').addEventListener('change', function (e) { setCompare(state.cmpA, e.target.value); });
-  $('h2h-a').addEventListener('change', function (e) { state.h2hA = e.target.value; renderH2H(); });
-  $('h2h-b').addEventListener('change', function (e) { state.h2hB = e.target.value; renderH2H(); });
+  $('h2h-a').addEventListener('change', function (e) { state.h2hA = e.target.value; snapH2HTabs(); renderH2H(); });
+  $('h2h-b').addEventListener('change', function (e) { state.h2hB = e.target.value; snapH2HTabs(); renderH2H(); });
 
   /* fixtures show more / less */
   $('fixtures-more').addEventListener('click', function () {
@@ -1436,7 +1783,16 @@ function init() {
     setCompare: setCompare,
     setScope: setScope,
     openHub: openHub,
-    closeHub: closeHub
+    closeHub: closeHub,
+    fxKey: fxKey,
+    h2hAll: h2hAll,
+    venueMatches: venueMatches,
+    teamStatBlock: teamStatBlock,
+    overUnder: overUnder,
+    topScorerOf: topScorerOf,
+    sharedCompFor: sharedCompFor,
+    parsePicker: parsePicker,
+    fmtDT: fmtDT
   };
 
   if (document.fonts && document.fonts.ready) {
